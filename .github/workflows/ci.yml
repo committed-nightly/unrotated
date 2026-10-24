@@ -1,0 +1,218 @@
+name: CI
+
+'on':
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ['3.10', '3.12']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+
+      # Most of the tests here skip themselves without logrotate, so assert
+      # one is present rather than let a run that tested nothing go green.
+      - name: logrotate is on PATH
+        run: logrotate --version | head -1 | grep -qF 'logrotate'
+
+      - run: pip install -e ".[dev]"
+      - run: pytest
+
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install ruff
+      - run: ruff check .
+
+      # logbook#23 and logbook#40: a workflow that never compiles produces no
+      # jobs, no logs and no annotations, and most of the org does not check.
+      # ubuntu-latest ships shellcheck, so this covers the `run:` scripts too
+      # -- and this workflow is mostly `run:` scripts.
+      - name: actionlint
+        run: |
+          set -euo pipefail
+          version=1.7.7
+          curl -fsSL -o actionlint.tar.gz \
+            "https://github.com/rhysd/actionlint/releases/download/v${version}/actionlint_${version}_linux_amd64.tar.gz"
+          tar -xzf actionlint.tar.gz actionlint
+          shellcheck --version | head -2
+          ./actionlint -no-color -oneline
+
+  corpus:
+    # Every other job runs unrotated over configs its author wrote, so between
+    # them they cover the cases its author thought of. This one runs it over
+    # the 19 configs the runner image already ships, and fails when that
+    # corpus stops testing anything. A count of files found is not evidence --
+    # stockbox asserts on verdicts instead. See corpus.toml, and logbook#48
+    # for why the org wanted this at all.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: logrotate is on PATH
+        run: logrotate --version | head -1 | grep -qF 'logrotate'
+
+      - run: pip install -e . git+https://github.com/committed-nightly/stockbox
+
+      # Printed before the run, so a failure below can be read against what
+      # was on the box rather than guessed at from an exit code.
+      - run: stockbox roots -c corpus.toml
+      - run: stockbox run -c corpus.toml
+
+  dogfood:
+    # The README quotes this run. If the example or the tool changes, this is
+    # the job that notices before a reader does.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install -e .
+
+      - name: logrotate is on PATH
+        run: logrotate --version | head -1 | grep -qF 'logrotate'
+
+      - name: the example reports what the README says it reports
+        run: |
+          set -euo pipefail
+          cd examples
+          unrotated logrotate.conf > out.txt && status=0 || status=$?
+          cat out.txt
+          test "$status" -eq 1
+          grep -qF '10 lines here have no effect on what logrotate does.' out.txt
+          grep -qF '3 of them confirmed by blanking the line and running logrotate again (10 logrotate runs).' out.txt
+          grep -qF "1 directive could not be confirmed either way: logrotate's plan does not mention it." out.txt
+          # Every kind the README's example shows.
+          for kind in include-missing overridden-directive duplicate-log-entry \
+                      rotates-nothing log-missing config-never-read; do
+            grep -qF "$kind" out.txt
+          done
+          # The exact places the README names, so a renumbered example is caught.
+          for place in 'logrotate.conf:16' 'logrotate.d/app:2' 'logrotate.d/app:4' \
+                       'logrotate.d/app:6' 'logrotate.d/catchall:3' \
+                       'logrotate.d/ghost:1' 'logrotate.d/legacy:1' \
+                       'logrotate.d/sized:2' 'logrotate.d/nginx.dpkg-dist'; do
+            grep -qF "$place" out.txt
+          done
+
+      - name: the deletion check is what separates a confirmed finding from a read one
+        run: |
+          set -euo pipefail
+          # The README's claim about the control, in both directions. An
+          # overridden interval is visible in logrotate's plan and comes back
+          # confirmed; an overridden `compress` is not, and must come back
+          # marked rather than stamped as measured.
+          mkdir -p control && cd control
+          mkdir -p logs && echo x > logs/app.log
+
+          printf '"logs/app.log" {\n    weekly\n    monthly\n    rotate 4\n}\n' > a.conf
+          unrotated a.conf --json > a.json || true
+          python3 -c "
+          import json
+          d = json.load(open('a.json'))
+          assert d['confirmed'] == 1, d
+          assert d['unconfirmable'] == 0, d
+          assert d['findings'][0]['checked'] == 'confirmed', d['findings']
+          print('visible directive: confirmed')
+          "
+
+          printf '"logs/app.log" {\n    weekly\n    compress\n    nocompress\n}\n' > b.conf
+          unrotated b.conf --json > b.json || true
+          python3 -c "
+          import json
+          d = json.load(open('b.json'))
+          assert d['confirmed'] == 0, d
+          assert d['unconfirmable'] == 1, d
+          assert d['findings'][0]['checked'] == 'invisible', d['findings']
+          print('invisible directive: not claimed as measured')
+          "
+
+      - name: size replaces a rotation interval and maxsize does not
+        run: |
+          set -euo pipefail
+          mkdir -p sizes && cd sizes
+          mkdir -p logs && echo x > logs/app.log
+
+          # The distinction the whole interval group rests on. Asserted both
+          # ways, so the pair cannot pass by unrotated having stopped looking
+          # at either directive.
+          printf '"logs/app.log" {\n    daily\n    size 100M\n}\n' > kills.conf
+          unrotated kills.conf -q > kills.txt && s=0 || s=$?
+          cat kills.txt
+          test "$s" -eq 1
+          grep -qF 'overridden-directive' kills.txt
+
+          printf '"logs/app.log" {\n    daily\n    maxsize 100M\n}\n' > keeps.conf
+          unrotated keeps.conf > keeps.txt && s=0 || s=$?
+          cat keeps.txt
+          test "$s" -eq 0
+          grep -qF 'Every rule unrotated can check rotates something.' keeps.txt
+
+      - name: a config file logrotate never reads is reported, and its rules are not
+        run: |
+          set -euo pipefail
+          mkdir -p taboo && cd taboo
+          mkdir -p logs logrotate.d && echo x > logs/app.log
+          printf 'daily\nrotate 4\ninclude logrotate.d\n' > logrotate.conf
+          printf '"logs/app.log" {\n    weekly\n    monthly\n}\n' > logrotate.d/app.dpkg-dist
+
+          unrotated logrotate.conf > out.txt && s=0 || s=$?
+          cat out.txt
+          test "$s" -eq 1
+          grep -qF 'config-never-read' out.txt
+          # The override inside that file must NOT be reported: logrotate
+          # never read the file, so there is no overridden directive in it.
+          if grep -qF 'overridden-directive' out.txt; then
+            echo 'reported a directive from a file logrotate never read' >&2
+            exit 1
+          fi
+
+          # The counterfactual: rename it to something not taboo and the
+          # override appears. Without this the step above could pass by
+          # unrotated having stopped reading drop-ins altogether.
+          mv logrotate.d/app.dpkg-dist logrotate.d/app
+          unrotated logrotate.conf > named.txt || true
+          cat named.txt
+          grep -qF 'overridden-directive' named.txt
+
+      - name: a clean config exits 0 and says so
+        run: |
+          set -euo pipefail
+          mkdir -p clean && cd clean
+          mkdir -p logs && echo x > logs/app.log
+          printf '"logs/app.log" {\n    weekly\n    rotate 4\n    compress\n}\n' > logrotate.conf
+          unrotated logrotate.conf | tee clean.txt
+          grep -qF 'Every rule unrotated can check rotates something.' clean.txt
+
+      - name: with no logrotate to ask, it exits 2 and claims nothing on stdout
+        run: |
+          set -euo pipefail
+          mkdir -p nolr && cd nolr
+          mkdir -p logs && echo x > logs/app.log
+          printf '"logs/app.log" {\n    weekly\n}\n' > logrotate.conf
+          unrotated logrotate.conf --logrotate not-installed-anywhere \
+            >out.txt 2>err.txt && s=0 || s=$?
+          test "$s" -eq 2
+          cat err.txt
+          grep -qF 'will not guess' err.txt
+          # The finding that matters: no clean bill of health on stdout.
+          test ! -s out.txt
