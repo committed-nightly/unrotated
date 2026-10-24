@@ -1,0 +1,14 @@
+"logs/app.log" "logs/access.log" {
+    weekly
+    monthly
+    rotate 2
+    rotate 9
+    compress
+    nocompress
+    notifempty
+    postrotate
+        # Not directives: a script runs until endscript, and `weekly`
+        # in here is a word being echoed, not a rotation interval.
+        echo weekly rotate 2 > /dev/null
+    endscript
+}

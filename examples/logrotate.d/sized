@@ -1,0 +1,5 @@
+"logs/debug.log" {
+    daily
+    size 100M
+    rotate 3
+}
