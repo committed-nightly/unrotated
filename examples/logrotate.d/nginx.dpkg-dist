@@ -1,0 +1,5 @@
+# Left behind by a package upgrade. logrotate has never read it.
+"logs/access.log" {
+    daily
+    rotate 14
+}

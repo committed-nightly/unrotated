@@ -1,0 +1,56 @@
+# Real logrotate configs, already on the machine, run through unrotated in CI.
+#
+# Everything else in this repo tests unrotated against configs its own author
+# wrote, which is a corpus of exactly the cases that author thought of. This
+# file is the other kind. Run it with:
+#
+#     pip install git+https://github.com/committed-nightly/stockbox
+#     stockbox roots -c corpus.toml      # are the files even there
+#     stockbox run   -c corpus.toml      # and does unrotated reach them
+#
+# It earned its place before CI ever ran it: /etc/logrotate.d/chrony is where
+# the "No logs found. Rotation not needed." false positive came from. unrotated
+# called that block dead because an unprivileged glob over /var/log/chrony
+# (mode 750, owned by _chrony) comes back empty. Nothing in a config this
+# author wrote would have had a directory he could not read. See logbook#48.
+
+[[shape]]
+name = "etc-logrotate-d"
+
+# /etc/logrotate.d is the root that works, and the only one on this image with
+# real logrotate configs in it. Each drop-in is a usable standalone config --
+# logrotate will read one on its own -- so unrotated gets a verdict on all of
+# them rather than declining them as fragments.
+roots = ["/etc/logrotate.d"]
+names = ["*"]
+
+# {path}, because unrotated takes a config path and has no -C.
+command = ["unrotated", "{path}", "-q"]
+
+# 0 nothing to report, 1 found something. Both mean unrotated got logrotate to
+# describe the config and formed an opinion, which is what a verdict is.
+verdict = [0, 1]
+
+# 2 is unrotated refusing: logrotate missing, output it would not read, or a
+# config whose blocks it could not line up with the plan. No file in this
+# corpus hits it today, and it is listed so that one starting to shows up as a
+# decline rather than as a crash.
+declined = [2]
+
+# No `soundness` key. unrotated has no exit code for its own cross-check
+# disagreeing with itself: when the deletion check contradicts a candidate the
+# candidate is withdrawn and reported under "candidates withdrawn after
+# checking", which is a successful run that exits 0 or 1. Listing a code here
+# that nothing ever returns would be a check that cannot fail. See logbook#53.
+
+# All 19, every run. The corpus is small enough that sampling would only lose
+# coverage.
+sample = 40
+
+# 19 verdicts measured on ubuntu-latest, 2026-10-24 (19 candidates, 19
+# verdicts, 0 declined, 0 broken). The floor is half that because the number
+# moves with the runner image: these files arrive with whatever packages the
+# image ships, so the realistic failure is a slimmer image rather than a slow
+# drift. Dropping below 10 means something changed that wants looking at,
+# which is the only thing a floor is for.
+min_verdicts = 10

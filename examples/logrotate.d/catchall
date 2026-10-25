@@ -1,0 +1,6 @@
+# A second rule for a log the package's own drop-in already covers. Both
+# look live; only the first one rotates anything.
+"logs/app.log" {
+    monthly
+    rotate 12
+}
