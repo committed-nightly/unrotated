@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import stat
 import tempfile
 from dataclasses import dataclass, field
 
@@ -11,6 +12,14 @@ from .parse import Block, ParseError, overridden
 from .plan import LogrotateError, Plan, plan_for
 from .tree import Tree, load, mirror
 from .verify import Checker, Verdict
+
+
+class ConfigPathError(OSError):
+    """The path given is not something unrotated can read as a config.
+
+    An OSError because that is what it is, and because the command line
+    already turns one into exit 2 with the message on stderr.
+    """
 
 
 class AlignmentError(Exception):
@@ -98,8 +107,44 @@ def _claimant(pairs: list, path: str, before: tuple[str, int]) -> str:
     return ""
 
 
+_NOT_REGULAR = (
+    (stat.S_ISFIFO, "a named pipe"),
+    (stat.S_ISSOCK, "a socket"),
+    (stat.S_ISBLK, "a block device"),
+    (stat.S_ISCHR, "a character device"),
+)
+
+
+def _refuse_unreadable(config: str) -> None:
+    """Reject a config path this program cannot read, before anything runs.
+
+    `analyse` asks logrotate for its plan before it opens the config
+    itself, so without this check the cost of a bad argument is logrotate's
+    to decide rather than ours. For a directory that is a wasted subprocess
+    and a bare `Is a directory` at the end of it; for a named pipe it is
+    the full 120s timeout, because logrotate's own open() blocks waiting
+    for a writer that is never coming.
+    """
+    mode = os.stat(config).st_mode  # absent or unsearchable: the OS says so, now
+    if stat.S_ISDIR(mode):
+        raise ConfigPathError(
+            f"{config} is a directory, and unrotated reads one config file plus the "
+            "files it includes. Point it at the config that includes this directory, "
+            "usually /etc/logrotate.conf."
+        )
+    if not stat.S_ISREG(mode):
+        kind = next((name for test, name in _NOT_REGULAR if test(mode)), "not a regular file")
+        raise ConfigPathError(
+            f"{config} is {kind}, not a regular file. unrotated reads its config more "
+            "than once, so it will not start one it cannot read twice."
+        )
+    with open(config, "rb"):  # unreadable: likewise, and before the subprocess
+        pass
+
+
 def analyse(config: str, binary: str = "logrotate", verify: bool = True) -> Result:
     """Run logrotate over `config` and report the lines with no effect."""
+    _refuse_unreadable(config)
     with tempfile.TemporaryDirectory(prefix="unrotated-") as workdir:
         plan = plan_for(config, os.path.join(workdir, "state0"), binary=binary)
         result = Result(config=config, version=plan.version, files_read=list(plan.files_read))

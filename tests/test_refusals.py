@@ -12,9 +12,9 @@ import os
 import pytest
 
 from unrotated import disk
-from unrotated.analyse import AlignmentError, _align
+from unrotated.analyse import AlignmentError, ConfigPathError, _align, analyse
 from unrotated.parse import Block, ConfigFile
-from unrotated.plan import Plan, PlanBlock
+from unrotated.plan import LogrotateError, Plan, PlanBlock
 from unrotated.tree import Node, Tree
 
 
@@ -61,6 +61,56 @@ class TestAlignment:
         tree.root.config.blocks[0].patterns = ["/a.log", "/b.log", "/c d.log"]
         plan = plan_of('/a.log /b.log\n"/c d.log"')
         assert len(_align(tree, plan)) == 1
+
+
+class TestConfigPath:
+    """The argument is checked before logrotate is asked anything.
+
+    Every case here names a logrotate that is not installed, so if the
+    check ever moves back after `plan_for` these fail with a
+    `LogrotateError` about PATH instead of the error being asserted. That
+    is the regression worth catching: the old order paid for a bad
+    argument at logrotate's pace, which for a named pipe was 120 seconds
+    of waiting on an open() that could never return.
+    """
+
+    ABSENT = "logrotate-that-is-not-installed"
+
+    def test_a_directory_says_which_file_to_point_at_instead(self, tmp_path):
+        with pytest.raises(ConfigPathError, match="is a directory") as caught:
+            analyse(str(tmp_path), binary=self.ABSENT)
+        # The mistake this is written for is `unrotated /etc/logrotate.d`,
+        # so the answer has to name the config that includes it.
+        assert "/etc/logrotate.conf" in str(caught.value)
+
+    def test_a_named_pipe_is_refused_instead_of_opened(self, tmp_path):
+        fifo = tmp_path / "logrotate.conf"
+        os.mkfifo(fifo)
+        with pytest.raises(ConfigPathError, match="named pipe"):
+            analyse(str(fifo), binary=self.ABSENT)
+
+    def test_a_config_that_is_not_there_is_refused_first(self, tmp_path):
+        with pytest.raises(FileNotFoundError):
+            analyse(str(tmp_path / "gone.conf"), binary=self.ABSENT)
+
+    @pytest.mark.skipif(os.geteuid() == 0, reason="root can read anything")
+    def test_a_config_that_cannot_be_read_is_refused_first(self, tmp_path):
+        config = tmp_path / "logrotate.conf"
+        config.write_text("/a.log {\n    weekly\n}\n")
+        config.chmod(0o000)
+        try:
+            with pytest.raises(PermissionError):
+                analyse(str(config), binary=self.ABSENT)
+        finally:
+            config.chmod(0o644)
+
+    def test_a_readable_regular_file_gets_as_far_as_logrotate(self, tmp_path):
+        # The control: without it the four above would pass on a check
+        # that rejected everything.
+        config = tmp_path / "logrotate.conf"
+        config.write_text("/a.log {\n    weekly\n}\n")
+        with pytest.raises(LogrotateError, match="not on PATH"):
+            analyse(str(config), binary=self.ABSENT)
 
 
 class TestDisk:

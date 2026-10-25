@@ -46,6 +46,15 @@ class TestExitCodes:
         assert main([os.path.join(tree.base, "absent.conf")]) == 2
         assert capsys.readouterr().out == ""
 
+    def test_a_directory_is_two_and_names_the_file_to_use(self, tree, capsys):
+        # `unrotated /etc/logrotate.d` is the shape of this: the drop-in
+        # directory is what people think of as "the config".
+        assert main([tree.include_dir]) == 2
+        captured = capsys.readouterr()
+        assert captured.out == ""
+        assert "is a directory" in captured.err
+        assert "/etc/logrotate.conf" in captured.err
+
 
 class TestOutputModes:
     def _example(self, tree):
