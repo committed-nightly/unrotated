@@ -30,6 +30,12 @@ Exit code is 0 when there is nothing to report, 1 when there is, and 2 when
 unrotated could not get an answer. On exit 2 nothing is printed to stdout, so
 a run that failed can never be read as a clean config.
 
+Point it at the config file, not at `/etc/logrotate.d`. A drop-in directory
+read on its own is not the same config — reached through an `include`,
+logrotate leaves a relative log pattern unexpanded, and read directly it
+expands it — so unrotated refuses a directory and names the file to use
+instead, rather than answering a question you did not ask.
+
 Nothing here writes to your config or your logs. Every logrotate run is `-d`,
 with a throwaway state file, and the deletion check edits a copy.
 
