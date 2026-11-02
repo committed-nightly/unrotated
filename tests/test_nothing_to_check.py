@@ -18,7 +18,7 @@ import os
 
 import pytest
 
-from unrotated.analyse import Result, analyse
+from unrotated.analyse import Result
 from unrotated.cli import main
 
 from .conftest import needs_logrotate
@@ -122,9 +122,7 @@ class TestDenominator:
     def test_the_clean_verdict_carries_the_rule_count(self, tree, capsys):
         tree.log("a.log")
         tree.log("b.log")
-        tree.top(
-            f"{tree.logs}/a.log {{\n    weekly\n}}\n{tree.logs}/b.log {{\n    weekly\n}}\n"
-        )
+        tree.top(f"{tree.logs}/a.log {{\n    weekly\n}}\n{tree.logs}/b.log {{\n    weekly\n}}\n")
         assert main([tree.conf]) == 0
         assert "Read 2 rules in 1 config file." in capsys.readouterr().out
 

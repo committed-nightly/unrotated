@@ -27,8 +27,13 @@ unrotated --no-verify            # skip the deletion check
 ```
 
 Exit code is 0 when there is nothing to report, 1 when there is, and 2 when
-unrotated could not get an answer. On exit 2 nothing is printed to stdout, so
-a run that failed can never be read as a clean config.
+unrotated could not get an answer — including when logrotate rejected every
+line of the file it was given. On exit 2 nothing is printed to stdout, so a
+run that failed can never be read as a clean config.
+
+A config with no rotation rules in it exits 0, but says so in its own words
+rather than reporting a clean one. See [when there is nothing to
+check](#when-there-is-nothing-to-check).
 
 Point it at the config file, not at `/etc/logrotate.d`. A drop-in directory
 read on its own is not the same config — reached through an `include`,
@@ -127,10 +132,49 @@ logrotate.d/sized:2: overridden-directive
     keeps the interval
     logrotate used: logrotate.d/sized:3
 
-10 lines here have no effect on what logrotate does.
+10 lines here have no effect on what logrotate does. Read 5 rules in 6 config files.
 3 of them confirmed by blanking the line and running logrotate again (10 logrotate runs).
 1 directive could not be confirmed either way: logrotate's plan does not mention it.
 ```
+
+## When there is nothing to check
+
+Every run ends with what it was measured over — `Read 5 rules in 6 config
+files` above. That count is there because without it a run that found nothing
+wrong and a run that found nothing *at all* print the same sentence, and the
+second one is not good news:
+
+```
+$ : > empty.conf && unrotated empty.conf
+empty.conf: logrotate read nothing.
+
+No rules here: logrotate read nothing from empty.conf. Nothing to check.
+$ echo $?
+0
+```
+
+Still exit 0 — a config with no rotation rules in it is not a fault, and an
+`/etc/logrotate.conf` that sets `weekly` at the top and includes an empty
+drop-in directory is a real and fine state of affairs. But it does not get the
+sentence that means "I looked at your rules and they are all live," because
+there were none to look at.
+
+A file logrotate could make nothing of at all is different, and is exit 2:
+
+```
+$ printf 'hello world\n' > notes.txt && unrotated notes.txt
+unrotated: logrotate rejected notes.txt:1: unknown option 'hello' -- ignoring line
+unrotated: logrotate rejected the only line it read from notes.txt, and found no rotation rule. This is not a logrotate config, so there is nothing to report on it -- not even that it is clean.
+$ echo $?
+2
+```
+
+The hinge is whether anything survived. One stray directive in a real config
+is a note on an otherwise good answer — exit 0, and the verdict says `and
+skipped 1 line logrotate rejected` so you know what it does not cover. Every
+line rejected and no rule found means the question was never asked, and
+`unrotated` would rather say so than hand back a clean bill of health for a
+file that is not a config.
 
 ## The deletion check, and its control
 

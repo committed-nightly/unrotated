@@ -98,7 +98,7 @@ jobs:
           unrotated logrotate.conf > out.txt && status=0 || status=$?
           cat out.txt
           test "$status" -eq 1
-          grep -qF '10 lines here have no effect on what logrotate does.' out.txt
+          grep -qF '10 lines here have no effect on what logrotate does. Read 5 rules in 6 config files.' out.txt
           grep -qF '3 of them confirmed by blanking the line and running logrotate again (10 logrotate runs).' out.txt
           grep -qF "1 directive could not be confirmed either way: logrotate's plan does not mention it." out.txt
           # Every kind the README's example shows.
@@ -201,7 +201,69 @@ jobs:
           mkdir -p logs && echo x > logs/app.log
           printf '"logs/app.log" {\n    weekly\n    rotate 4\n    compress\n}\n' > logrotate.conf
           unrotated logrotate.conf | tee clean.txt
-          grep -qF 'Every rule unrotated can check rotates something.' clean.txt
+          grep -qF 'Every rule unrotated can check rotates something. Read 1 rule in 1 config file.' clean.txt
+
+      - name: a config with no rules does not report a clean one
+        run: |
+          set -euo pipefail
+          # logbook#59 and logbook#62. The three inputs below all used to end
+          # on the clean sentence and exit 0, having checked nothing. The
+          # clean sentence is asserted absent, not just the new one present:
+          # a build that printed both would pass on presence alone.
+          mkdir -p norules && cd norules
+          clean='Every rule unrotated can check rotates something.'
+
+          : > empty.conf
+          printf 'weekly\nrotate 4\n' > globals.conf
+          mkdir -p drop && printf 'weekly\ninclude drop\n' > emptydir.conf
+
+          for conf in empty.conf globals.conf emptydir.conf; do
+            unrotated "$conf" > out.txt && s=0 || s=$?
+            cat out.txt
+            test "$s" -eq 0
+            grep -qF 'Nothing to check.' out.txt
+            if grep -qF "$clean" out.txt; then
+              echo "$conf: reported a clean config over no rules at all" >&2
+              exit 1
+            fi
+          done
+
+          # The control: one real rule, and the clean sentence comes back.
+          # Without it the loop above would pass on a build that had deleted
+          # the clean verdict outright.
+          mkdir -p logs && echo x > logs/app.log
+          printf '"logs/app.log" {\n    weekly\n}\n' > one.conf
+          unrotated one.conf | tee one.txt
+          grep -qF "$clean" one.txt
+
+      - name: a file logrotate makes nothing of is exit 2, not a clean config
+        run: |
+          set -euo pipefail
+          mkdir -p notconf && cd notconf
+          printf 'hello world\nthis is not logrotate config\n' > notes.txt
+          unrotated notes.txt > out.txt 2> err.txt && s=0 || s=$?
+          cat out.txt err.txt
+          test "$s" -eq 2
+          grep -qF 'not a logrotate config' err.txt
+          # The one that matters: no verdict on stdout, clean or otherwise.
+          test ! -s out.txt
+
+          # The hinge, the other way. One stray directive in a real config is
+          # a note on a good answer, not a refusal.
+          mkdir -p logs && echo x > logs/app.log
+          printf 'hello world\n"logs/app.log" {\n    weekly\n}\n' > typo.conf
+          unrotated typo.conf > typo.txt && s=0 || s=$?
+          cat typo.txt
+          test "$s" -eq 0
+          grep -qF 'skipped 1 line logrotate rejected' typo.txt
+
+      - name: a path that is not there gets a sentence, not a Python repr
+        run: |
+          set -euo pipefail
+          unrotated /tmp/definitely-not-a-config 2> err.txt && s=0 || s=$?
+          cat err.txt
+          test "$s" -eq 2
+          grep -qxF 'unrotated: /tmp/definitely-not-a-config: no such file or directory' err.txt
 
       - name: with no logrotate to ask, it exits 2 and claims nothing on stdout
         run: |

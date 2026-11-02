@@ -33,10 +33,7 @@ def _denominator(result: Result) -> str:
     files = _plural(len(result.files_read), "config file")
     seen = f"Read {_plural(result.rules, 'rule')} in {files}"
     if result.rejected_lines:
-        seen += (
-            f", and skipped {_plural(result.rejected_lines, 'line')} "
-            "logrotate rejected"
-        )
+        seen += f", and skipped {_plural(result.rejected_lines, 'line')} logrotate rejected"
     return seen
 
 
@@ -75,10 +72,11 @@ def refusal(result: Result) -> str:
     already on stderr above this; what this adds is that there is nothing
     left over, so no verdict follows.
     """
+    count = result.rejected_lines
+    how_many = "the only line" if count == 1 else f"all {count} lines"
     # Unwrapped, like the rest of stderr here: see the note in `text`.
     return (
-        f"unrotated: logrotate rejected every one of the "
-        f"{_plural(result.rejected_lines, 'line')} it read from {result.config}, "
+        f"unrotated: logrotate rejected {how_many} it read from {result.config}, "
         "and found no rotation rule. This is not a logrotate config, so there "
         "is nothing to report on it -- not even that it is clean."
     )
@@ -133,9 +131,7 @@ def text(result: Result, quiet: bool = False) -> str:
         # teaches you to believe it about one that has them (logbook#59).
         lines.append(f"No rules here: {_nothing_read(result)}. Nothing to check.")
     else:
-        lines.append(
-            f"Every rule unrotated can check rotates something. {_denominator(result)}."
-        )
+        lines.append(f"Every rule unrotated can check rotates something. {_denominator(result)}.")
 
     candidates = result.confirmed + result.invisible + len(result.rejected)
     if result.verification == "checked" and candidates:
