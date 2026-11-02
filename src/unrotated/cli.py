@@ -6,11 +6,23 @@ import argparse
 import sys
 
 from . import report
-from .analyse import AlignmentError, analyse
+from .analyse import AlignmentError, ConfigPathError, analyse
 from .parse import ParseError
 from .plan import LogrotateError
 
 DEFAULT_CONFIG = "/etc/logrotate.conf"
+
+
+def _os_error(error: OSError) -> str:
+    """An OSError as a sentence, rather than as its repr.
+
+    `str(OSError)` is `[Errno 2] No such file or directory: '/tmp/x'`,
+    which is Python's, not ours. The rest of the family prints
+    `<prog>: <path>: <reason>` and so does this.
+    """
+    reason = (error.strerror or "cannot be read").lower()
+    name = error.filename or "?"
+    return f"{name}: {reason}"
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -56,15 +68,22 @@ def main(argv: list[str] | None = None) -> int:
             binary=args.logrotate,
             verify=not args.no_verify,
         )
-    except (LogrotateError, AlignmentError, ParseError) as error:
+    except (LogrotateError, AlignmentError, ParseError, ConfigPathError) as error:
         print(f"unrotated: {error}", file=sys.stderr)
         return 2
     except OSError as error:
-        print(f"unrotated: {error}", file=sys.stderr)
+        print(f"unrotated: {_os_error(error)}", file=sys.stderr)
         return 2
 
     for line in report.error_lines(result):
         print(line, file=sys.stderr)
+
+    if result.unreadable_as_config:
+        # Exit 2 rather than 0 with a different sentence: nothing was read,
+        # so there is no measurement for a sentence to be about. Nothing on
+        # stdout either, which is what stops a failed run reading as clean.
+        print(report.refusal(result), file=sys.stderr)
+        return 2
 
     if args.json:
         print(report.as_json(result))

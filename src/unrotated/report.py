@@ -19,6 +19,35 @@ def _where(finding) -> str:
     return finding.file if finding.line == 0 else f"{finding.file}:{finding.line}"
 
 
+def _plural(count: int, noun: str) -> str:
+    return f"{count} {noun}" if count == 1 else f"{count} {noun}s"
+
+
+def _denominator(result: Result) -> str:
+    """What the verdict was measured over.
+
+    On every run, including the ones with findings: a count is the only
+    thing that separates "nothing is wrong here" from "there was nothing
+    here", and the reader cannot supply it themselves.
+    """
+    files = _plural(len(result.files_read), "config file")
+    seen = f"Read {_plural(result.rules, 'rule')} in {files}"
+    if result.rejected_lines:
+        seen += (
+            f", and skipped {_plural(result.rejected_lines, 'line')} "
+            "logrotate rejected"
+        )
+    return seen
+
+
+def _nothing_read(result: Result) -> str:
+    """The fact that establishes there was nothing to check."""
+    if not result.files_read:
+        return f"logrotate read nothing from {result.config}"
+    files = _plural(len(result.files_read), "config file")
+    return f"no rotation block in the {files} logrotate read"
+
+
 def error_lines(result: Result) -> list[str]:
     """Diagnostics, for stderr. Never part of any mode's stdout."""
     lines = [f"unrotated: {error}" for error in result.errors]
@@ -37,6 +66,22 @@ def error_lines(result: Result) -> list[str]:
     if result.verification == "unavailable":
         lines.append(f"unrotated: no deletion check: {result.verification_note}")
     return lines
+
+
+def refusal(result: Result) -> str:
+    """Why unrotated will not report on this input at all.
+
+    Only for `Result.unreadable_as_config`. The per-line rejections are
+    already on stderr above this; what this adds is that there is nothing
+    left over, so no verdict follows.
+    """
+    return _wrap(
+        f"unrotated: logrotate rejected every one of the "
+        f"{_plural(result.rejected_lines, 'line')} it read from {result.config}, "
+        "and found no rotation rule. This is not a logrotate config, so there "
+        "is nothing to report on it -- not even that it is clean.",
+        "",
+    )
 
 
 def text(result: Result, quiet: bool = False) -> str:
@@ -75,9 +120,26 @@ def text(result: Result, quiet: bool = False) -> str:
         count = len(findings)
         verb = "has" if count == 1 else "have"
         plural = "" if count == 1 else "s"
-        lines.append(f"{count} line{plural} here {verb} no effect on what logrotate does.")
+        lines.append(
+            _wrap(
+                f"{count} line{plural} here {verb} no effect on what logrotate "
+                f"does. {_denominator(result)}.",
+                "",
+            )
+        )
+    elif result.rules == 0:
+        # Not a clean bill of health, because there was nothing to check. A
+        # tool that says "every rule is fine" about a config with no rules
+        # teaches you to believe it about one that has them (logbook#59).
+        lines.append(_wrap(f"No rules here: {_nothing_read(result)}. Nothing to check.", ""))
     else:
-        lines.append("Every rule unrotated can check rotates something.")
+        lines.append(
+            _wrap(
+                "Every rule unrotated can check rotates something. "
+                f"{_denominator(result)}.",
+                "",
+            )
+        )
 
     candidates = result.confirmed + result.invisible + len(result.rejected)
     if result.verification == "checked" and candidates:
@@ -109,6 +171,9 @@ def as_json(result: Result) -> str:
             "config": result.config,
             "logrotate_version": result.version,
             "files_read": result.files_read,
+            "rules": result.rules,
+            "directive_lines": result.directive_lines,
+            "rejected_lines": result.rejected_lines,
             "findings": [
                 {
                     "kind": finding.kind,

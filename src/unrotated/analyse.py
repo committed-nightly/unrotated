@@ -67,9 +67,33 @@ class Result:
     blocked_blocks: list[str] = field(default_factory=list)
     #: (pattern, reason) for patterns the filesystem would not answer for.
     unknown_patterns: list[tuple[str, str]] = field(default_factory=list)
+    #: Rotation blocks found, which is the denominator of every verdict here.
+    #: Reported on every run, because "nothing is wrong" and "there was
+    #: nothing to look at" print the same without it (logbook#59).
+    rules: int = 0
+    #: Lines unrotated read as a directive, an `include` or a pattern.
+    directive_lines: int = 0
+    #: Of those, the ones logrotate itself rejected.
+    rejected_lines: int = 0
 
     def sorted_findings(self) -> list[Finding]:
         return sorted(self.findings, key=Finding.sort_key)
+
+    @property
+    def understood_lines(self) -> int:
+        """Lines unrotated read that logrotate did not reject."""
+        return self.directive_lines - self.rejected_lines
+
+    @property
+    def unreadable_as_config(self) -> bool:
+        """Did logrotate reject every line there was, leaving nothing read?
+
+        Not the same as a config with one stray directive in it. If nothing
+        survived, the thing this was pointed at is not a logrotate config,
+        and unrotated has no answer to give about it rather than a clean
+        one -- which is what exit 2 is for.
+        """
+        return self.rejected_lines > 0 and self.understood_lines <= 0
 
 
 def _align(tree: Tree, plan: Plan) -> list[tuple[Block, object]]:
@@ -154,6 +178,9 @@ def analyse(config: str, binary: str = "logrotate", verify: bool = True) -> Resu
         for path, line, message in plan.config_errors:
             result.errors.append(f"logrotate rejected {path}:{line}: {message}")
 
+        result.rules = len(pairs)
+        _count_lines(result, tree, plan)
+
         # Consulted only for the blocks logrotate's own answer does not
         # settle: the ones it was stopped short of, and the ones it found no
         # log for without saying why. Everywhere else its answer is the
@@ -179,6 +206,38 @@ def analyse(config: str, binary: str = "logrotate", verify: bool = True) -> Resu
                     result.findings.append(_override_finding(block, loser, winner, ""))
 
     return result
+
+
+def _count_lines(result: Result, tree: Tree, plan: Plan) -> None:
+    """How many lines unrotated read, and how many logrotate threw away.
+
+    Counted as a set of (file, line) on both sides so the two are
+    comparable. The parser's own idea of a meaningful line is the right
+    numerator here: a line it read as `hello world` and logrotate rejected
+    as an unknown option is exactly the disagreement being measured, and
+    counting lines some third way would measure neither side.
+    """
+    mine: set[tuple[str, int]] = set()
+    for config in tree.files():
+        for directive in config.globals:
+            mine.add((config.path, directive.line))
+        for line, _ in config.includes:
+            mine.add((config.path, line))
+        for block in config.blocks:
+            # The header can run over several lines; only its first is
+            # recorded, and one line per block is enough to make the point.
+            mine.add((config.path, block.line))
+            for directive in block.directives:
+                mine.add((config.path, directive.line))
+
+    theirs = {(path, line) for path, line, _ in plan.config_errors}
+
+    result.directive_lines = len(mine)
+    # Intersected rather than taking logrotate's count whole: it can
+    # complain about a line inside a `postrotate` body, which the parser
+    # skips and so never counted, and that would make the arithmetic
+    # negative rather than wrong in a visible way.
+    result.rejected_lines = len(mine & theirs)
 
 
 def _config_findings(result: Result, plan: Plan) -> None:
