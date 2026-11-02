@@ -208,7 +208,10 @@ class TestOsErrorText:
             err = capsys.readouterr().err
             assert err.strip() == f"unrotated: {tree.conf}: permission denied"
         finally:
-            os.chmod(tree.conf, 0o644)
+            # 0o600, not 0o644: this only has to be readable again so the
+            # tmpdir can be cleaned up, and a world-readable mode here is
+            # what CodeQL flags (py/overly-permissive-file).
+            os.chmod(tree.conf, 0o600)
 
     def test_a_directory_keeps_its_own_message(self, tree, capsys):
         # ConfigPathError is an OSError too, and its message is written
