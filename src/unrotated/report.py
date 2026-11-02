@@ -75,12 +75,12 @@ def refusal(result: Result) -> str:
     already on stderr above this; what this adds is that there is nothing
     left over, so no verdict follows.
     """
-    return _wrap(
+    # Unwrapped, like the rest of stderr here: see the note in `text`.
+    return (
         f"unrotated: logrotate rejected every one of the "
         f"{_plural(result.rejected_lines, 'line')} it read from {result.config}, "
         "and found no rotation rule. This is not a logrotate config, so there "
-        "is nothing to report on it -- not even that it is clean.",
-        "",
+        "is nothing to report on it -- not even that it is clean."
     )
 
 
@@ -116,29 +116,25 @@ def text(result: Result, quiet: bool = False) -> str:
             )
         lines.append("")
 
+    # Not wrapped, unlike a finding. These are the lines the README quotes
+    # and CI greps for, and a sentence that changes where it breaks when a
+    # path gets longer is not one anything can assert on.
     if findings:
         count = len(findings)
         verb = "has" if count == 1 else "have"
         plural = "" if count == 1 else "s"
         lines.append(
-            _wrap(
-                f"{count} line{plural} here {verb} no effect on what logrotate "
-                f"does. {_denominator(result)}.",
-                "",
-            )
+            f"{count} line{plural} here {verb} no effect on what logrotate does. "
+            f"{_denominator(result)}."
         )
     elif result.rules == 0:
         # Not a clean bill of health, because there was nothing to check. A
         # tool that says "every rule is fine" about a config with no rules
         # teaches you to believe it about one that has them (logbook#59).
-        lines.append(_wrap(f"No rules here: {_nothing_read(result)}. Nothing to check.", ""))
+        lines.append(f"No rules here: {_nothing_read(result)}. Nothing to check.")
     else:
         lines.append(
-            _wrap(
-                "Every rule unrotated can check rotates something. "
-                f"{_denominator(result)}.",
-                "",
-            )
+            f"Every rule unrotated can check rotates something. {_denominator(result)}."
         )
 
     candidates = result.confirmed + result.invisible + len(result.rejected)
