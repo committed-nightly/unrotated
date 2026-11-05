@@ -98,9 +98,9 @@ jobs:
           unrotated logrotate.conf > out.txt && status=0 || status=$?
           cat out.txt
           test "$status" -eq 1
-          grep -qF '10 lines here have no effect on what logrotate does. Read 5 rules in 6 config files.' out.txt
-          grep -qF '3 of them confirmed by blanking the line and running logrotate again (10 logrotate runs).' out.txt
-          grep -qF "1 directive could not be confirmed either way: logrotate's plan does not mention it." out.txt
+          grep -qxF '10 lines here have no effect on what logrotate does. Read 5 rules in 6 config files.' out.txt
+          grep -qxF '3 of them confirmed by blanking the line and running logrotate again (10 logrotate runs).' out.txt
+          grep -qxF "1 directive could not be confirmed either way: logrotate's plan does not mention it." out.txt
           # Every kind the README's example shows.
           for kind in include-missing overridden-directive duplicate-log-entry \
                       rotates-nothing log-missing config-never-read; do
