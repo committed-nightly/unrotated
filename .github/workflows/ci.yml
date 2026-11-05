@@ -165,7 +165,12 @@ jobs:
           unrotated keeps.conf > keeps.txt && s=0 || s=$?
           cat keeps.txt
           test "$s" -eq 0
-          grep -qF 'Every rule unrotated can check rotates something.' keeps.txt
+          # Whole-line, denominator included. This assertion is where the bug
+          # logbook#64 describes had already happened: the clean verdict grew
+          # a `Read N rule in M config file.` count on 2026-11-02 (logbook#62),
+          # and because this was a substring match the step stayed green while
+          # silently stopping asserting the count it now reads past.
+          grep -qxF 'Every rule unrotated can check rotates something. Read 1 rule in 1 config file.' keeps.txt
 
       - name: a config file logrotate never reads is reported, and its rules are not
         run: |
