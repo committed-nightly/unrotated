@@ -77,9 +77,72 @@ jobs:
       - run: stockbox roots -c corpus.toml
       - run: stockbox run -c corpus.toml
 
+  assertions:
+    # Every other job in this file asserts something about unrotated. This one
+    # asserts that those assertions can fail.
+    #
+    # deadassert reads the `run:` scripts here and reports the greps that pass
+    # whether or not the thing they name is true: a whole summary line matched
+    # as a substring, and a negated guard searching for a string nothing
+    # establishes is ever produced. There were five of those in this file
+    # (logbook#64) and this job is what stops them coming back.
+    #
+    # What it will not catch, and this file has both: greps whose pattern is a
+    # shell variable, which it reports as undecided rather than guessing (four
+    # here, two of them real prefix assertions fixed by hand in the no-rules
+    # step), and greps inside shell function bodies, which it does not descend
+    # into at all (logbook#66). So read a clean run as covering the literal
+    # patterns at the top level of each script, not every grep in the file.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install git+https://github.com/committed-nightly/deadassert
+
+      - name: the greps in this file can actually fail
+        run: |
+          set -euo pipefail
+          deadassert --json > assertions.json && status=0 || status=$?
+          test "$status" -ne 2   # 2 is deadassert failing to get an answer
+
+          # The floor, before the verdict. logbook#59: "no findings" is only
+          # evidence if something was read, and the one failure that would
+          # make this job green and worthless is extraction quietly returning
+          # nothing. 17 assertions in 23 scripts when this job was added, so
+          # 13 is a floor and not a pin -- it is meant to survive ordinary
+          # edits to this file and not to survive deadassert going blind.
+          python3 - <<'PY'
+          import json, sys
+
+          d = json.load(open("assertions.json"))
+          found, negated = d["assertions"], d["negated"]
+          print(f"read {found} assertions in {d['scripts']} scripts, {negated} negated")
+          if found < 13:
+              sys.exit(f"deadassert read {found} assertions, expected >= 13: this job tested nothing")
+          if negated < 1:
+              sys.exit("no negated assertions read, so the unwitnessed check had nothing to work on")
+          PY
+
+          # Prints the findings if there are any, and exits 1 with them in the
+          # log rather than leaving a bare exit code to interpret.
+          deadassert
+
   dogfood:
     # The README quotes this run. If the example or the tool changes, this is
     # the job that notices before a reader does.
+    #
+    # `-qxF` is the whole-line form and is deliberate wherever the pattern is
+    # a complete line of output -- the summary verdicts and their counts. With
+    # plain `-qF` the match is a substring, so appending anything to a summary
+    # line leaves these steps green while they stop asserting the sentence
+    # they name, which is exactly the edit logbook#59 asks for and which
+    # logbook#62 already made here. `-qF` stays for the things that genuinely
+    # are substrings: finding kinds, the places in the example, phrases out of
+    # wrapped detail text, and stderr diagnostics. See logbook#63 and
+    # logbook#64, and the `assertions` job above, which fails if a whole-line
+    # pattern loses its `-x` again.
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
