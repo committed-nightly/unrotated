@@ -206,7 +206,7 @@ jobs:
           mkdir -p logs && echo x > logs/app.log
           printf '"logs/app.log" {\n    weekly\n    rotate 4\n    compress\n}\n' > logrotate.conf
           unrotated logrotate.conf | tee clean.txt
-          grep -qF 'Every rule unrotated can check rotates something. Read 1 rule in 1 config file.' clean.txt
+          grep -qxF 'Every rule unrotated can check rotates something. Read 1 rule in 1 config file.' clean.txt
 
       - name: a config with no rules does not report a clean one
         run: |
@@ -216,7 +216,16 @@ jobs:
           # clean sentence is asserted absent, not just the new one present:
           # a build that printed both would pass on presence alone.
           mkdir -p norules && cd norules
+          # Two patterns, because the two uses below want opposite things and
+          # one variable cannot be right for both. The negation wants the
+          # sentence caught wherever it appears, so it stays a substring and
+          # omits the count. The control wants proof the clean verdict came
+          # back whole, so it is the full line. deadassert cannot see either
+          # of these -- both patterns are shell expansions, which it reports
+          # as undecided rather than guessing -- so this pair was found by
+          # hand and is not covered by the assertions job.
           clean='Every rule unrotated can check rotates something.'
+          clean_line="$clean Read 1 rule in 1 config file."
 
           : > empty.conf
           printf 'weekly\nrotate 4\n' > globals.conf
@@ -239,7 +248,7 @@ jobs:
           mkdir -p logs && echo x > logs/app.log
           printf '"logs/app.log" {\n    weekly\n}\n' > one.conf
           unrotated one.conf | tee one.txt
-          grep -qF "$clean" one.txt
+          grep -qxF "$clean_line" one.txt
 
       - name: a file logrotate makes nothing of is exit 2, not a clean config
         run: |
