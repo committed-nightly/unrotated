@@ -77,9 +77,72 @@ jobs:
       - run: stockbox roots -c corpus.toml
       - run: stockbox run -c corpus.toml
 
+  assertions:
+    # Every other job in this file asserts something about unrotated. This one
+    # asserts that those assertions can fail.
+    #
+    # deadassert reads the `run:` scripts here and reports the greps that pass
+    # whether or not the thing they name is true: a whole summary line matched
+    # as a substring, and a negated guard searching for a string nothing
+    # establishes is ever produced. There were five of those in this file
+    # (logbook#64) and this job is what stops them coming back.
+    #
+    # What it will not catch, and this file has both: greps whose pattern is a
+    # shell variable, which it reports as undecided rather than guessing (four
+    # here, two of them real prefix assertions fixed by hand in the no-rules
+    # step), and greps inside shell function bodies, which it does not descend
+    # into at all (logbook#66). So read a clean run as covering the literal
+    # patterns at the top level of each script, not every grep in the file.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install git+https://github.com/committed-nightly/deadassert
+
+      - name: the greps in this file can actually fail
+        run: |
+          set -euo pipefail
+          deadassert --json > assertions.json && status=0 || status=$?
+          test "$status" -ne 2   # 2 is deadassert failing to get an answer
+
+          # The floor, before the verdict. logbook#59: "no findings" is only
+          # evidence if something was read, and the one failure that would
+          # make this job green and worthless is extraction quietly returning
+          # nothing. 17 assertions in 23 scripts when this job was added, so
+          # 13 is a floor and not a pin -- it is meant to survive ordinary
+          # edits to this file and not to survive deadassert going blind.
+          python3 - <<'PY'
+          import json, sys
+
+          d = json.load(open("assertions.json"))
+          found, negated = d["assertions"], d["negated"]
+          print(f"read {found} assertions in {d['scripts']} scripts, {negated} negated")
+          if found < 13:
+              sys.exit(f"deadassert read {found} assertions, expected >= 13: this job tested nothing")
+          if negated < 1:
+              sys.exit("no negated assertions read, so the unwitnessed check had nothing to work on")
+          PY
+
+          # Prints the findings if there are any, and exits 1 with them in the
+          # log rather than leaving a bare exit code to interpret.
+          deadassert
+
   dogfood:
     # The README quotes this run. If the example or the tool changes, this is
     # the job that notices before a reader does.
+    #
+    # `-qxF` is the whole-line form and is deliberate wherever the pattern is
+    # a complete line of output -- the summary verdicts and their counts. With
+    # plain `-qF` the match is a substring, so appending anything to a summary
+    # line leaves these steps green while they stop asserting the sentence
+    # they name, which is exactly the edit logbook#59 asks for and which
+    # logbook#62 already made here. `-qF` stays for the things that genuinely
+    # are substrings: finding kinds, the places in the example, phrases out of
+    # wrapped detail text, and stderr diagnostics. See logbook#63 and
+    # logbook#64, and the `assertions` job above, which fails if a whole-line
+    # pattern loses its `-x` again.
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -98,9 +161,9 @@ jobs:
           unrotated logrotate.conf > out.txt && status=0 || status=$?
           cat out.txt
           test "$status" -eq 1
-          grep -qF '10 lines here have no effect on what logrotate does. Read 5 rules in 6 config files.' out.txt
-          grep -qF '3 of them confirmed by blanking the line and running logrotate again (10 logrotate runs).' out.txt
-          grep -qF "1 directive could not be confirmed either way: logrotate's plan does not mention it." out.txt
+          grep -qxF '10 lines here have no effect on what logrotate does. Read 5 rules in 6 config files.' out.txt
+          grep -qxF '3 of them confirmed by blanking the line and running logrotate again (10 logrotate runs).' out.txt
+          grep -qxF "1 directive could not be confirmed either way: logrotate's plan does not mention it." out.txt
           # Every kind the README's example shows.
           for kind in include-missing overridden-directive duplicate-log-entry \
                       rotates-nothing log-missing config-never-read; do
@@ -165,7 +228,12 @@ jobs:
           unrotated keeps.conf > keeps.txt && s=0 || s=$?
           cat keeps.txt
           test "$s" -eq 0
-          grep -qF 'Every rule unrotated can check rotates something.' keeps.txt
+          # Whole-line, denominator included. This assertion is where the bug
+          # logbook#64 describes had already happened: the clean verdict grew
+          # a `Read N rule in M config file.` count on 2026-11-02 (logbook#62),
+          # and because this was a substring match the step stayed green while
+          # silently stopping asserting the count it now reads past.
+          grep -qxF 'Every rule unrotated can check rotates something. Read 1 rule in 1 config file.' keeps.txt
 
       - name: a config file logrotate never reads is reported, and its rules are not
         run: |
@@ -201,7 +269,7 @@ jobs:
           mkdir -p logs && echo x > logs/app.log
           printf '"logs/app.log" {\n    weekly\n    rotate 4\n    compress\n}\n' > logrotate.conf
           unrotated logrotate.conf | tee clean.txt
-          grep -qF 'Every rule unrotated can check rotates something. Read 1 rule in 1 config file.' clean.txt
+          grep -qxF 'Every rule unrotated can check rotates something. Read 1 rule in 1 config file.' clean.txt
 
       - name: a config with no rules does not report a clean one
         run: |
@@ -211,7 +279,16 @@ jobs:
           # clean sentence is asserted absent, not just the new one present:
           # a build that printed both would pass on presence alone.
           mkdir -p norules && cd norules
+          # Two patterns, because the two uses below want opposite things and
+          # one variable cannot be right for both. The negation wants the
+          # sentence caught wherever it appears, so it stays a substring and
+          # omits the count. The control wants proof the clean verdict came
+          # back whole, so it is the full line. deadassert cannot see either
+          # of these -- both patterns are shell expansions, which it reports
+          # as undecided rather than guessing -- so this pair was found by
+          # hand and is not covered by the assertions job.
           clean='Every rule unrotated can check rotates something.'
+          clean_line="$clean Read 1 rule in 1 config file."
 
           : > empty.conf
           printf 'weekly\nrotate 4\n' > globals.conf
@@ -234,7 +311,7 @@ jobs:
           mkdir -p logs && echo x > logs/app.log
           printf '"logs/app.log" {\n    weekly\n}\n' > one.conf
           unrotated one.conf | tee one.txt
-          grep -qF "$clean" one.txt
+          grep -qxF "$clean_line" one.txt
 
       - name: a file logrotate makes nothing of is exit 2, not a clean config
         run: |
